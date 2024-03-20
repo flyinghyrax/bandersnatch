@@ -8,7 +8,7 @@ import logging
 from pathlib import Path
 from typing import Any, NamedTuple
 
-from .simple import SimpleDigest, SimpleFormat, get_digest_value, get_format_value
+from ..simple import SimpleDigest, SimpleFormat, get_digest_value, get_format_value
 
 logger = logging.getLogger("bandersnatch")
 

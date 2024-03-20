@@ -42,7 +42,7 @@ class SimpleDigest(StrEnum):
 logger = logging.getLogger(__name__)
 
 
-class InvalidSimpleFormat(KeyError):
+class InvalidSimpleFormat(ValueError):
     """We don't have a valid format choice from configuration"""
 
     pass
