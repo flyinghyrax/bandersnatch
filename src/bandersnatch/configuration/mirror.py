@@ -1,6 +1,6 @@
 from configparser import ConfigParser, NoOptionError, NoSectionError
 from logging import getLogger
-from pathlib import Path
+from pathlib import PurePath
 from typing import Any
 
 from attrs import NOTHING, Factory, converters, define, field, fields, validators
@@ -28,11 +28,11 @@ logger = getLogger("bandersnatch")
 _default_root_uri = "https://files.pythonhosted.org"
 
 
-def _default_diff_file(obj: "MirrorConfiguration") -> Path:
+def _default_diff_file(obj: "MirrorConfiguration") -> PurePath:
     if hasattr(obj, "directory"):
         return obj.directory / "mirrored-files"
     else:
-        return Path("mirrored-files")
+        return PurePath("mirrored-files")
 
 
 def _has_legacy_section_reference(value: str) -> bool:
@@ -55,18 +55,30 @@ def _eval_legacy_section_reference(config: ConfigParser, value: str) -> str | No
         return None
 
 
+# FIXME: diff-file was theoretically optional; the configuration validator would use
+# the empty string for it if the option wasn't present. But in the implementation of the
+# mirror subcommand that string was passed to 'storage_plugin.PATH_BACKEND' to create a
+# path object, and `bool(Path(""))` is True, so all the `if diff_file` checks in the
+# mirror function always evaluated to True, so in practice a diff file was always
+# created.
+# If we want diff_file to be optional then it should be changed here to have type
+# `PurePath | None` and a default value of None. The dynamic default of
+# '${directory}/mirrored-files' was only used if a "{{ }}"-style reference evaluation
+# failed, not if the option was unset.
 @define(
     kw_only=True,
-    field_transformer=convert_by_annotation({
-        bool: converters.to_bool,
-        int: int,
-        float: float,
-        Path: Path,
-    }),
+    field_transformer=convert_by_annotation(
+        {
+            bool: converters.to_bool,
+            int: int,
+            float: float,
+            PurePath: PurePath,
+        }
+    ),
 )
 class MirrorConfiguration:
     # directory option is required - currently the only [mirror] option with no default
-    directory: Path
+    directory: PurePath
 
     storage_backend_name: str = field(
         default="filesystem", alias="storage_backend", validator=not_empty
@@ -106,7 +118,7 @@ class MirrorConfiguration:
     keep_index_versions: int = field(default=0, validator=validators.ge(0))
 
     # default value is computed based on the value of 'directory'
-    diff_file: Path = field(default=Factory(_default_diff_file, takes_self=True))
+    diff_file: PurePath = field(default=Factory(_default_diff_file, takes_self=True))
 
     diff_append_epoch: bool = False
 
@@ -130,7 +142,9 @@ class MirrorConfiguration:
         converter=if_str(get_digest_value),  # type: ignore
     )
 
-    log_config: Path | None = field(default=None, converter=converters.optional(Path))
+    log_config: PurePath | None = field(
+        default=None, converter=converters.optional(PurePath)
+    )
 
     cleanup: bool = False
 

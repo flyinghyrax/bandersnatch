@@ -12,9 +12,11 @@ from _pytest.logging import LogCaptureFixture
 
 import bandersnatch.mirror
 import bandersnatch.storage
-from bandersnatch.configuration import Singleton
+from bandersnatch.configuration import Singleton, next
+from bandersnatch.configuration.comparison import ComparisonMethod
+from bandersnatch.configuration.errors import ConfigurationError
 from bandersnatch.main import main
-from bandersnatch.simple import SimpleFormat
+from bandersnatch.simple import SimpleDigest, SimpleFormat
 
 if TYPE_CHECKING:
     from bandersnatch.mirror import BandersnatchMirror
@@ -27,6 +29,7 @@ async def empty_dict(*args: Any, **kwargs: Any) -> dict:
 def setup() -> None:
     """simple setup function to clear Singleton._instances before each test"""
     Singleton._instances = {}
+    next.BandersnatchConfig._instances = {}
 
 
 def test_main_help(capfd: CaptureFixture) -> None:
@@ -86,16 +89,13 @@ def test_main_reads_config_values(mirror_mock: mock.MagicMock, tmpdir: Path) -> 
         "workers": 3,
         "root_uri": "",
         "json_save": False,
-        "digest_name": "sha256",
+        "digest_name": SimpleDigest.SHA256,
         "keep_index_versions": 0,
         "release_files_save": True,
         "storage_backend": "filesystem",
-        "diff_file": diff_file,
-        "diff_append_epoch": False,
-        "diff_full_path": diff_file,
         "cleanup": False,
-        "compare_method": "hash",
-        "download_mirror": "",
+        "compare_method": ComparisonMethod.HASH,
+        "download_mirror": None,
         "download_mirror_no_fallback": False,
         "simple_format": SimpleFormat.ALL,
     } == kwargs
@@ -125,7 +125,7 @@ def test_main_throws_exception_on_unsupported_digest_name(
         parser.write(fp)
     sys.argv = ["bandersnatch", "-c", conffile, "mirror"]
 
-    with pytest.raises(ValueError) as e:
+    with pytest.raises(ConfigurationError) as e:
         main(asyncio.new_event_loop())
 
     assert "foobar is not a valid" in str(e.value)

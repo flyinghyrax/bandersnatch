@@ -14,6 +14,7 @@ import bandersnatch.log
 import bandersnatch.master
 import bandersnatch.mirror
 import bandersnatch.verify
+from bandersnatch.configuration import next as config_next
 from bandersnatch.storage import storage_backend_plugins
 
 # See if we have uvloop and use if so
@@ -149,7 +150,11 @@ def _make_parser() -> argparse.ArgumentParser:
     return parser
 
 
-async def async_main(args: argparse.Namespace, config: ConfigParser) -> int:
+async def async_main(
+    args: argparse.Namespace,
+    config: ConfigParser,
+    config_next: config_next.BandersnatchConfig,
+) -> int:
     if args.op.lower() == "delete":
         async with bandersnatch.master.Master(
             config.get("mirror", "master"),
@@ -161,7 +166,7 @@ async def async_main(args: argparse.Namespace, config: ConfigParser) -> int:
         return await bandersnatch.verify.metadata_verify(config, args)
     elif args.op.lower() == "sync":
         return await bandersnatch.mirror.mirror(
-            config, args.packages, not args.skip_simple_root
+            config_next, args.packages, not args.skip_simple_root
         )
 
     if args.force_check:
@@ -187,7 +192,7 @@ async def async_main(args: argparse.Namespace, config: ConfigParser) -> int:
                 f"No status file to move ({status_file}) - Full sync will occur"
             )
 
-    return await bandersnatch.mirror.mirror(config)
+    return await bandersnatch.mirror.mirror(config_next)
 
 
 def main(loop: asyncio.AbstractEventLoop | None = None) -> int:
@@ -213,6 +218,9 @@ def main(loop: asyncio.AbstractEventLoop | None = None) -> int:
             logger.error(f"Could not create config file: {e}")
         return 1
 
+    # Initialize configuration singleton and load the configuration file
+    config_next.BandersnatchConfig().load_file(Path(args.config))
+
     config = bandersnatch.configuration.BandersnatchConfig(
         config_file=args.config
     ).config
@@ -222,7 +230,7 @@ def main(loop: asyncio.AbstractEventLoop | None = None) -> int:
 
     if loop:
         loop.set_debug(args.debug)
-    return asyncio.run(async_main(args, config))
+    return asyncio.run(async_main(args, config, config_next.BandersnatchConfig()))
 
 
 if __name__ == "__main__":
