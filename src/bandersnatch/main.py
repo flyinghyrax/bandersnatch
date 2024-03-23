@@ -14,7 +14,7 @@ import bandersnatch.log
 import bandersnatch.master
 import bandersnatch.mirror
 import bandersnatch.verify
-from bandersnatch.configuration import next as config_next
+from bandersnatch.configuration import core as config_next
 from bandersnatch.storage import storage_backend_plugins
 
 # See if we have uvloop and use if so
@@ -219,7 +219,8 @@ def main(loop: asyncio.AbstractEventLoop | None = None) -> int:
         return 1
 
     # Initialize configuration singleton and load the configuration file
-    config_next.BandersnatchConfig().load_file(Path(args.config))
+    new_config = config_next.BandersnatchConfig()
+    new_config.load_user_config(Path(args.config))
 
     config = bandersnatch.configuration.BandersnatchConfig(
         config_file=args.config
@@ -230,7 +231,7 @@ def main(loop: asyncio.AbstractEventLoop | None = None) -> int:
 
     if loop:
         loop.set_debug(args.debug)
-    return asyncio.run(async_main(args, config, config_next.BandersnatchConfig()))
+    return asyncio.run(async_main(args, config, new_config))
 
 
 if __name__ == "__main__":

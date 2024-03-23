@@ -7,7 +7,7 @@ import sys
 import time
 from collections.abc import Awaitable, Callable
 from json import dump
-from pathlib import Path, PurePath, WindowsPath
+from pathlib import Path, WindowsPath
 from threading import RLock
 from typing import Any, TypeVar
 from urllib.parse import unquote, urlparse
@@ -15,8 +15,8 @@ from urllib.parse import unquote, urlparse
 from filelock import Timeout
 
 from . import utils
+from .configuration.core import BandersnatchConfig
 from .configuration.mirror import ComparisonMethod, MirrorConfiguration
-from .configuration.next import BandersnatchConfig
 from .errors import PackageNotFound
 from .filter import LoadedFilters
 from .master import Master
@@ -919,7 +919,7 @@ async def _run_in_storage_executor(
 
 
 async def _setup_diff_file(
-    storage_plugin: Storage, configured_path: PurePath, append_epoch: bool
+    storage_plugin: Storage, configured_path: str, append_epoch: bool
 ) -> Path:
     # use the storage backend to convert an abstract path to a concrete one
     concrete_path = storage_plugin.PATH_BACKEND(configured_path)
@@ -949,13 +949,13 @@ async def mirror(
     specific_packages: list[str] | None = None,
     sync_simple_index: bool = True,
 ) -> int:
-    mirror_config = config.get_typed(MirrorConfiguration)
+    mirror_config = config.get_validated(MirrorConfiguration)
 
     storage_plugin = next(
         iter(
             storage_backend_plugins(
                 mirror_config.storage_backend_name,
-                config=config.config_parser,
+                config=config,
                 clear_cache=True,
             )
         )

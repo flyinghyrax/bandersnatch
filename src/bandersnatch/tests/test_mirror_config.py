@@ -9,59 +9,46 @@ import pytest
 
 import bandersnatch.configuration.original as og
 from bandersnatch.configuration.comparison import ComparisonMethod
+from bandersnatch.configuration.core import BandersnatchConfig
 from bandersnatch.configuration.errors import (
     ConfigurationError,
     InvalidValueError,
     MissingOptionError,
 )
 from bandersnatch.configuration.mirror import MirrorConfiguration
-from bandersnatch.configuration.next import BandersnatchConfig
 from bandersnatch.simple import SimpleDigest
 
 
 def load_config_str(content: str) -> BandersnatchConfig:
     cfg = BandersnatchConfig()
-    cfg.config_parser.read_string(content)
+    cfg.read_string(content)
     return cfg
 
 
-# Clear any existing singleton instances prior to running any
-# test function that requests it as a fixture.
-@pytest.fixture
-def pre_del_singleton() -> None:
-    BandersnatchConfig._instances = {}
-
-
-def test_is_singleton(pre_del_singleton: None) -> None:
-    inst1 = BandersnatchConfig()
-    inst2 = BandersnatchConfig()
-    assert inst1 is inst2
-
-
-def test_empty_config(pre_del_singleton: None) -> None:
+def test_empty_config() -> None:
     cfg = BandersnatchConfig()
     with pytest.raises(ConfigurationError, match="missing required section"):
-        _ = cfg.get_typed(MirrorConfiguration)
+        _ = cfg.get_validated(MirrorConfiguration)
 
 
-def test_empty_section(pre_del_singleton: None) -> None:
+def test_empty_section() -> None:
     cfg = load_config_str("[mirror]\n")
     with pytest.raises(MissingOptionError, match="missing required option"):
-        _ = cfg.get_typed(MirrorConfiguration)
+        _ = cfg.get_validated(MirrorConfiguration)
 
 
-def test_reuse_typed_configs(pre_del_singleton: None) -> None:
+def test_reuse_typed_configs() -> None:
     content = """\
     [mirror]
     directory = /test
     """
     cfg = load_config_str(content)
-    opts1 = cfg.get_typed(MirrorConfiguration)
-    opts2 = cfg.get_typed(MirrorConfiguration)
+    opts1 = cfg.get_validated(MirrorConfiguration)
+    opts2 = cfg.get_validated(MirrorConfiguration)
     assert opts1 is opts2
 
 
-def test_minimal_mirror_config(pre_del_singleton: None) -> None:
+def test_minimal_mirror_config() -> None:
     test_path = "/usr/share/mirror"
     content = f"""\
     [mirror]
@@ -69,7 +56,7 @@ def test_minimal_mirror_config(pre_del_singleton: None) -> None:
     """
 
     cfg = load_config_str(content)
-    loaded_config = cfg.get_typed(MirrorConfiguration)
+    loaded_config = cfg.get_validated(MirrorConfiguration)
     direct_config = MirrorConfiguration(directory=Path(test_path))
     # excessive? maybe
     assert isinstance(loaded_config, MirrorConfiguration)
@@ -87,7 +74,7 @@ def test_minimal_mirror_config(pre_del_singleton: None) -> None:
     ],
 )
 def test_option_name_normalization(
-    keep_index_versions_key: str, pre_del_singleton: None
+    keep_index_versions_key: str,
 ) -> None:
     content = f"""\
     [mirror]
@@ -96,7 +83,7 @@ def test_option_name_normalization(
     {keep_index_versions_key} = 3
     """
     cfg = load_config_str(content)
-    mirror_opts = cfg.get_typed(MirrorConfiguration)
+    mirror_opts = cfg.get_validated(MirrorConfiguration)
     assert mirror_opts.keep_index_versions == 3
 
 
@@ -110,18 +97,19 @@ def test_option_name_normalization(
     ],
 )
 def test_default_diff_file(
-    directory_value: str, expected_diff_file: str, pre_del_singleton: None
+    directory_value: str,
+    expected_diff_file: str,
 ) -> None:
     content = f"""\
     [mirror]
     directory = {directory_value}
     """
     manager = load_config_str(content)
-    mirror_opts = manager.get_typed(MirrorConfiguration)
-    assert mirror_opts.diff_file == Path(expected_diff_file)
+    mirror_opts = manager.get_validated(MirrorConfiguration)
+    assert mirror_opts.diff_file == str(Path(expected_diff_file))
 
 
-def test_diff_file_interpolation(pre_del_singleton: None) -> None:
+def test_diff_file_interpolation() -> None:
     content = """\
     [test]
     example = /opt/mirror
@@ -131,22 +119,22 @@ def test_diff_file_interpolation(pre_del_singleton: None) -> None:
     diff-file = ${directory}/diff.txt
     """
     cfg = load_config_str(content)
-    mirror_opts = cfg.get_typed(MirrorConfiguration)
-    assert mirror_opts.diff_file == Path("/opt/mirror/diff.txt")
+    mirror_opts = cfg.get_validated(MirrorConfiguration)
+    assert mirror_opts.diff_file == "/opt/mirror/diff.txt"
 
 
-def test_diff_file_legacy_ref(pre_del_singleton: None) -> None:
+def test_diff_file_legacy_ref() -> None:
     content = """\
     [test]
-    example = /var/log/bandersnatch
+    example = /var/log
 
     [mirror]
     directory = /test
-    diff-file = {{ test_example }}
+    diff-file = {{ test_example }}/bandersnatch
     """
     cfg = load_config_str(content)
-    mirror_opts = cfg.get_typed(MirrorConfiguration)
-    assert mirror_opts.diff_file == Path("/var/log/bandersnatch")
+    mirror_opts = cfg.get_validated(MirrorConfiguration)
+    assert mirror_opts.diff_file == "/var/log/bandersnatch"
 
 
 @pytest.mark.parametrize(
@@ -158,7 +146,8 @@ def test_diff_file_legacy_ref(pre_del_singleton: None) -> None:
     ],
 )
 def test_default_root_uri(
-    release_files_option: str, expected_root_uri: str, pre_del_singleton: None
+    release_files_option: str,
+    expected_root_uri: str,
 ) -> None:
     config = f"""\
     [mirror]
@@ -166,7 +155,7 @@ def test_default_root_uri(
     {release_files_option}
     """
     manager = load_config_str(config)
-    mirror_opts = manager.get_typed(MirrorConfiguration)
+    mirror_opts = manager.get_validated(MirrorConfiguration)
     assert mirror_opts.root_uri == expected_root_uri
 
 
@@ -184,16 +173,14 @@ def permutate_case(*texts: str) -> Iterable[str]:
         *((v, False) for v in permutate_case("no", "off", "false")),
     ],
 )
-def test_boolean_conversion(
-    config_value: str, expected: bool, pre_del_singleton: None
-) -> None:
+def test_boolean_conversion(config_value: str, expected: bool) -> None:
     content = f"""\
     [mirror]
     directory = /test
     diff-append-epoch = {config_value}
     """
     manager = load_config_str(content)
-    mirror_opts = manager.get_typed(MirrorConfiguration)
+    mirror_opts = manager.get_validated(MirrorConfiguration)
     assert mirror_opts.diff_append_epoch == expected
 
 
@@ -207,9 +194,7 @@ def test_boolean_conversion(
     ],
 )
 def test_reject_non_positive_timeouts(
-    timeout_value: str,
-    expected_timeout: Any,
-    pre_del_singleton: None,
+    timeout_value: str, expected_timeout: Any
 ) -> None:
     content = f"""\
     [mirror]
@@ -218,7 +203,7 @@ def test_reject_non_positive_timeouts(
     """
     manager = load_config_str(content)
     with expected_timeout as e:
-        mirror_opts = manager.get_typed(MirrorConfiguration)
+        mirror_opts = manager.get_validated(MirrorConfiguration)
         assert mirror_opts.timeout == pytest.approx(e)
 
 
@@ -233,7 +218,7 @@ def test_reject_non_positive_timeouts(
     ],
 )
 def test_reject_out_of_range_worker_counts(
-    workers_value: str, expected_workers: Any, pre_del_singleton: None
+    workers_value: str, expected_workers: Any
 ) -> None:
     content = f"""\
     [mirror]
@@ -242,7 +227,7 @@ def test_reject_out_of_range_worker_counts(
     """
     manager = load_config_str(content)
     with expected_workers as e:
-        mirror_opts = manager.get_typed(MirrorConfiguration)
+        mirror_opts = manager.get_validated(MirrorConfiguration)
         assert mirror_opts.workers == e
 
 
@@ -267,7 +252,8 @@ _int_convert_error_pattern = r"can't convert option .+ to expected type 'int'"
     ],
 )
 def test_option_type_conversion(
-    workers_value: str, expected_workers: Any, pre_del_singleton: None
+    workers_value: str,
+    expected_workers: Any,
 ) -> None:
     content = f"""\
     [mirror]
@@ -276,7 +262,7 @@ def test_option_type_conversion(
     """
     with expected_workers as e:
         cfg = load_config_str(content)
-        mirror_opts = cfg.get_typed(MirrorConfiguration)
+        mirror_opts = cfg.get_validated(MirrorConfiguration)
         assert mirror_opts.workers == e
 
 
@@ -307,10 +293,12 @@ def test_option_type_conversion(
         """,
     ],
 )
-def test_inspect_error_messages(content: str, pre_del_singleton: None) -> None:
+def test_inspect_error_messages(
+    content: str,
+) -> None:
     try:
         cfg = load_config_str(content)
-        _ = cfg.get_typed(MirrorConfiguration)
+        _ = cfg.get_validated(MirrorConfiguration)
         pytest.fail("The statement above this should have thrown an exception")
     except Exception as exc:
         exc_str = str(exc)
@@ -364,15 +352,14 @@ def test_new_same_as_original(tmp_path: Path) -> None:
     config_path = tmp_path / "test.conf"
     config_path.write_text(content)
     # explicitly reset singletons
-    BandersnatchConfig._instances = {}
     og.BandersnatchConfig._instances = {}
     # read config with original config manager
     oracle = og.BandersnatchConfig(config_file=config_path.as_posix())
     oracle_opts = og.validate_config_values(oracle.config)
     # read config with new config manager
     sut = BandersnatchConfig()
-    sut.load_file(config_path)
-    sut_opts = sut.get_typed(MirrorConfiguration)
+    sut.load_user_config(config_path)
+    sut_opts = sut.get_validated(MirrorConfiguration)
 
     option_mappings = [
         OptionMapping("storage_backend_name"),
@@ -382,6 +369,7 @@ def test_new_same_as_original(tmp_path: Path) -> None:
         OptionMapping("cleanup"),
         OptionMapping("json_save", "save_json"),
         OptionMapping("release_files_save", "save_release_files"),
+        OptionMapping("diff_file_path", "diff_file"),
         # str -> str | None
         OptionMapping(
             "download_mirror",
@@ -393,7 +381,6 @@ def test_new_same_as_original(tmp_path: Path) -> None:
         # str -> ComparisonMethod
         OptionMapping("compare_method", None, ComparisonMethod),
         # str -> Path
-        OptionMapping("diff_file_path", "diff_file", Path),
     ]
 
     for opt in option_mappings:

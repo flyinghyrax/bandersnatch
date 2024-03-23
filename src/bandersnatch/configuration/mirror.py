@@ -1,15 +1,18 @@
-from configparser import ConfigParser, NoOptionError, NoSectionError
+from collections.abc import Callable
+from configparser import NoOptionError, NoSectionError
 from logging import getLogger
 from pathlib import PurePath
 from typing import Any
 
-from attrs import NOTHING, Factory, converters, define, field, fields, validators
+import attrs
+from attrs import converters, define, field, validators
 
+from bandersnatch.configuration.attrs_ext import if_str, not_empty
 from bandersnatch.configuration.comparison import ComparisonMethod, get_comparison_value
-from bandersnatch.configuration.converter import (
-    convert_by_annotation,
-    if_str,
-    not_empty,
+from bandersnatch.configuration.core import (
+    BandersnatchConfig,
+    eval_legacy_reference,
+    has_legacy_reference,
 )
 from bandersnatch.configuration.errors import (
     ConfigurationError,
@@ -28,87 +31,94 @@ logger = getLogger("bandersnatch")
 _default_root_uri = "https://files.pythonhosted.org"
 
 
-def _default_diff_file(obj: "MirrorConfiguration") -> PurePath:
-    if hasattr(obj, "directory"):
-        return obj.directory / "mirrored-files"
+def _get_option_from_source(
+    config: BandersnatchConfig, section_name: str, option: attrs.Attribute
+) -> tuple[str, object | None]:
+    option_name = option.alias or option.name
+
+    # If an option doesn't have a default then it's a required option, and
+    # it's an error for a required option to be missing from the config source
+    if option.default is attrs.NOTHING and not config.has_option(
+        section_name, option_name
+    ):
+        raise MissingOptionError.for_option(section_name, option_name)
+
+    # From here forward if an option is missing in the config source we assume that
+    # it has a default value. Reasonable to use None as a fallback here b/c its not
+    # possible to specify None/null/nil in a configparser file.
+    getter: Callable[..., Any]
+    if option.converter is not None:
+        getter = config.get
+    elif option.type == bool:
+        getter = config.getboolean
+    elif option.type == int:
+        getter = config.getint
+    elif option.type == float:
+        getter = config.getfloat
+    elif option.type == PurePath:
+        getter = config.getpath
     else:
-        return PurePath("mirrored-files")
+        getter = config.get
 
-
-def _has_legacy_section_reference(value: str) -> bool:
-    return "{{" in value and "}}" in value
-
-
-def _eval_legacy_section_reference(config: ConfigParser, value: str) -> str | None:
-    raw_ref = value.replace("{{", "").replace("}}", "")
-    ref_section, _, ref_key = raw_ref.partition("_")
-    ref_section = ref_section.strip()
-    ref_key = ref_key.strip()
     try:
-        return config.get(ref_section, ref_key)
-    except (NoSectionError, NoOptionError):
-        logger.error(
-            "Invalid section reference in 'diff-file'. "
-            "Saving diff files in the base mirror directory."
-        )
-        # setting to None and the attrs initializer should use the field's default value
+        option_value = getter(section_name, option_name, fallback=None)
+    except ValueError as exc:
+        type_name = option.type.__name__ if option.type else "???"
+        message = f"can't convert option '{option_name}' to expected type '{type_name}': {exc!s}"
+        raise InvalidValueError.for_option(section_name, option_name, message)
+
+    return option_name, option_value
+
+
+def _check_legacy_reference(config: BandersnatchConfig, value: str) -> str | None:
+    if not has_legacy_reference(value):
+        return value
+
+    logger.warning(
+        "Found section reference using '{{ }}' in 'diff-file' path. "
+        "Use ConfigParser's built-in extended interpolation instead, "
+        "for example '${mirror:directory}/new-files'"
+    )
+    try:
+        return eval_legacy_reference(config, value)
+    except (ValueError, NoSectionError, NoOptionError) as ref_err:
+        # NOTE: raise here would be a breaking change; previous impl. logged and
+        # fell back to a default. Create exception anyway for consistent error messages.
+        exc = InvalidValueError.for_option("mirror", "diff-file", str(ref_err))
+        logger.error(str(exc))
         return None
 
 
-# FIXME: diff-file was theoretically optional; the configuration validator would use
-# the empty string for it if the option wasn't present. But in the implementation of the
-# mirror subcommand that string was passed to 'storage_plugin.PATH_BACKEND' to create a
-# path object, and `bool(Path(""))` is True, so all the `if diff_file` checks in the
-# mirror function always evaluated to True, so in practice a diff file was always
-# created.
-# If we want diff_file to be optional then it should be changed here to have type
-# `PurePath | None` and a default value of None. The dynamic default of
-# '${directory}/mirrored-files' was only used if a "{{ }}"-style reference evaluation
-# failed, not if the option was unset.
-@define(
-    kw_only=True,
-    field_transformer=convert_by_annotation(
-        {
-            bool: converters.to_bool,
-            int: int,
-            float: float,
-            PurePath: PurePath,
-        }
-    ),
-)
+@define(kw_only=True)
 class MirrorConfiguration:
     # directory option is required - currently the only [mirror] option with no default
     directory: PurePath
-
     storage_backend_name: str = field(
         default="filesystem", alias="storage_backend", validator=not_empty
     )
 
-    master_url: str = field(
-        default="https://pypi.org", alias="master", validator=not_empty
-    )
-
-    proxy_url: str | None = field(
-        default=None,
-        alias="proxy",
-        validator=validators.optional(not_empty),
-    )
-
-    download_mirror_url: str | None = field(
-        default=None,
-        alias="download_mirror",
-        validator=validators.optional(not_empty),
-    )
+    master_url: str = field(default="https://pypi.org", alias="master")
+    proxy_url: str | None = field(default=None, alias="proxy")
+    download_mirror_url: str | None = field(default=None, alias="download_mirror")
     download_mirror_no_fallback: bool = False
+
+    save_release_files: bool = field(default=True, alias="release_files")
+    save_json: bool = field(default=False, alias="json")
 
     simple_format: SimpleFormat = field(
         default=SimpleFormat.ALL,
         converter=if_str(get_format_value),  # type: ignore
     )
 
-    save_release_files: bool = field(default=True, alias="release_files")
+    compare_method: ComparisonMethod = field(
+        default=ComparisonMethod.HASH,
+        converter=if_str(get_comparison_value),  # type: ignore
+    )
 
-    save_json: bool = field(default=False, alias="json")
+    digest_name: SimpleDigest = field(
+        default=SimpleDigest.SHA256,
+        converter=if_str(get_digest_value),  # type: ignore
+    )
 
     # this gets a non-empty default value in post-init if save_release_files is False
     root_uri: str = ""
@@ -117,9 +127,9 @@ class MirrorConfiguration:
 
     keep_index_versions: int = field(default=0, validator=validators.ge(0))
 
-    # default value is computed based on the value of 'directory'
-    diff_file: PurePath = field(default=Factory(_default_diff_file, takes_self=True))
-
+    # Probably better as PurePath, but str is more straightforward for handling '{{ }}'
+    # style section reference syntax.
+    diff_file: str | None = field(default=None)
     diff_append_epoch: bool = False
 
     stop_on_error: bool = False
@@ -132,25 +142,16 @@ class MirrorConfiguration:
 
     verifiers: int = field(default=3, validator=[validators.gt(0), validators.le(10)])
 
-    compare_method: ComparisonMethod = field(
-        default=ComparisonMethod.HASH,
-        converter=if_str(get_comparison_value),  # type: ignore
-    )
-
-    digest_name: SimpleDigest = field(
-        default=SimpleDigest.SHA256,
-        converter=if_str(get_digest_value),  # type: ignore
-    )
-
     log_config: PurePath | None = field(
         default=None, converter=converters.optional(PurePath)
     )
 
-    cleanup: bool = False
+    cleanup: bool = field(default=False, metadata={"deprecated": True})
 
     # Called after the attrs class is constructed; useful for dynamic defaults or
     # validation where more than one option is involved.
     def __attrs_post_init__(self) -> None:
+        # set dynamic default for root_uri if release-files is disabled
         if not self.save_release_files and not self.root_uri:
             logger.warning(
                 (
@@ -162,57 +163,39 @@ class MirrorConfiguration:
             )
             self.root_uri = _default_root_uri
 
-    # Create an instance with values from a ConfigParser. Iterates over the attrs fields
-    # defined on the class and uses a field's alias (if defined) or name (otherwise) as
-    # the key to lookup a value in the configparser section. Those keys and values are
-    # collected into a keyword-arguments dict, which is passed to the attrs-generated
-    # initializer. The generated initializer applies defined defaults, converters, and
-    # validators per field.
-    # Two config options don't 'fit the mold':
-    # - root_uri only gets a default if release_files is False. We can't specify this
-    #   at the field level but it fits ok in attrs' post-init hook.
-    # - diff_file supports a non-standard syntax for referencing the value of another
-    #   configparser option. It is preferred to use configparser's built-in support for
-    #   value interpolation, but removing the custom reference syntax would be a
-    #   breaking regression. The reference - if any - is evaluated prior to the attrs
-    #   initializer so any converters or validators are applied to the evaluated value.
+        # set dynamic default for diff-file based on directory
+        # FIXME: in previous implementation, diff-file seems theoretically optional.
+        # The config validator would set the empty string if it wasn't in the config
+        # file, and this dynamic default was only set if the value contained a '{{}}'
+        # style section reference and that reference was invalid. In the 'mirror'
+        # subcommand diff file sections where guarded by 'if diff_file' which would be
+        # false for the empty string. But earlier in the mirror subcommand the value of
+        # diff_file is passed to storage_plugin.PATH_BACKEND to create a path object,
+        # and `bool(Path(""))` is True, so the 'if diff_file' checks always passed and
+        # a diff file was always created.
+        if self.diff_file is None:
+            self.diff_file = str(self.directory / "mirrored-files")
+
     @classmethod
-    def from_config_parser(cls, config: ConfigParser) -> "MirrorConfiguration":
-        try:
-            source = config["mirror"]
-        except (KeyError, NoSectionError):
+    def from_config_source(cls, config: BandersnatchConfig) -> "MirrorConfiguration":
+        if "mirror" not in config:
             raise ConfigurationError(
                 "Configuration file missing required section '[mirror]'"
             )
 
         kwargs: dict[str, Any] = {}
-        for f in fields(cls):
-            key = f.alias or f.name
-            value = source.get(key)
 
-            # if the configuration field doesn't have a default value, then it's a
-            # required field and the configuration is invalid if there's no value for
-            # it in the section. If the config file format allows empty values then we
-            # may see an empty string here instead of None.
-            if f.default is NOTHING and not value:
-                raise MissingOptionError.for_option("mirror", key)
+        for f in attrs.fields(cls):
+            option_name, option_value = _get_option_from_source(config, "mirror", f)
 
             # special handling for diff-file, which supports referencing another config
             # entry via '{{ section_key }}' syntax.
-            if (
-                key == "diff_file"
-                and value is not None
-                and _has_legacy_section_reference(value)
-            ):
-                logger.warning(
-                    "Found section reference using '{{ }}' in 'diff-file' path. "
-                    "Use ConfigParser's built-in interpolation instead, for example "
-                    "'${mirror.directory}/new-files'"
-                )
-                value = _eval_legacy_section_reference(config, value)
+            if option_name == "diff_file" and isinstance(option_value, str):
+                option_value = _check_legacy_reference(config, option_value)
 
-            if value is not None:
-                kwargs[key] = value
+            # Add to constructor arguments for the configuration class
+            if option_value is not None:
+                kwargs[option_name] = option_value
 
         try:
             instance = cls(**kwargs)
