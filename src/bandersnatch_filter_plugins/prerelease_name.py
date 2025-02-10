@@ -6,8 +6,6 @@ from packaging.utils import canonicalize_name
 
 from bandersnatch.filter import FilterReleasePlugin
 
-logger = logging.getLogger("bandersnatch")
-
 
 class PreReleaseFilter(FilterReleasePlugin):
     """
@@ -15,6 +13,9 @@ class PreReleaseFilter(FilterReleasePlugin):
     """
 
     name = "prerelease_release"
+
+    logger = logging.getLogger(f"bandersnatch.filter.{name}")
+
     PRERELEASE_PATTERNS = (
         r".+rc\d+$",
         r".+a(lpha)?\d+$",
@@ -33,7 +34,7 @@ class PreReleaseFilter(FilterReleasePlugin):
                 re.compile(pattern_string)
                 for pattern_string in self.PRERELEASE_PATTERNS
             ]
-            logger.info(f"Initialized prerelease plugin with {self.patterns}")
+            self.logger.info(f"Initialized prerelease plugin with {self.patterns}")
 
         if not self.package_names:
             try:
@@ -45,7 +46,7 @@ class PreReleaseFilter(FilterReleasePlugin):
                 ]
             except KeyError:
                 pass
-            logger.info(
+            self.logger.info(
                 f"Initialized prerelease plugin {self.name}, filtering "
                 + f"{self.package_names if self.package_names else 'all packages'}"
             )
@@ -58,4 +59,14 @@ class PreReleaseFilter(FilterReleasePlugin):
         version = metadata["version"]
         if self.package_names and name not in self.package_names:
             return True
-        return not any(pattern.match(version) for pattern in self.patterns)
+
+        for pattern in self.patterns:
+            if pattern.match(version):
+                self.logger.debug(
+                    "rejecting release %s==%s: version matches pre-release pattern %r",
+                    name,
+                    version,
+                    pattern.pattern,
+                )
+                return False
+        return True

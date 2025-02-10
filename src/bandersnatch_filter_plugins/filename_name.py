@@ -3,8 +3,6 @@ import logging
 from bandersnatch.filter import FilterReleaseFilePlugin
 from bandersnatch.utils import parse_version
 
-logger = logging.getLogger("bandersnatch")
-
 
 class ExcludePlatformFilter(FilterReleaseFilePlugin):
     """
@@ -12,6 +10,8 @@ class ExcludePlatformFilter(FilterReleaseFilePlugin):
     """
 
     name = "exclude_platform"
+
+    logger = logging.getLogger(f"bandersnatch.filter.{name}")
 
     _patterns: list[str] = []
     _packagetypes: list[str] = []
@@ -64,7 +64,7 @@ class ExcludePlatformFilter(FilterReleaseFilePlugin):
         Initialize the plugin reading patterns from the config.
         """
         if self._patterns or self._packagetypes:
-            logger.debug(
+            self.logger.debug(
                 "Skipping initialization of Exclude Platform plugin. "
                 + "Already initialized"
             )
@@ -73,7 +73,7 @@ class ExcludePlatformFilter(FilterReleaseFilePlugin):
         try:
             tags = self.blocklist["platforms"].split()
         except KeyError:
-            logger.error(f"Plugin {self.name}: missing platforms= setting")
+            self.logger.error(f"Plugin {self.name}: missing platforms= setting")
             return
 
         for platform in tags:
@@ -109,7 +109,7 @@ class ExcludePlatformFilter(FilterReleaseFilePlugin):
             elif lplatform in self._linuxPlatformTypes:
                 self._patterns.extend([lplatform])
 
-        logger.info(f"Initialized {self.name} plugin with {self._patterns!r}")
+        self.logger.info(f"Initialized {self.name} plugin with {self._patterns!r}")
 
     def filter(self, metadata: dict) -> bool:
         """
@@ -140,11 +140,20 @@ class ExcludePlatformFilter(FilterReleaseFilePlugin):
 
         # Windows installer
         if pt in self._packagetypes:
+            self.logger.debug(
+                "rejecting release file %r: packagetype matches excluded platform bdist",
+                file_desc,
+            )
             return True
 
         fn = file_desc["filename"]
-        for i in self._patterns:
-            if i in fn:
+        for p in self._patterns:
+            if p in fn:
+                self.logger.debug(
+                    "rejecting release file %r: filename matches excluded platform tag %s",
+                    fn,
+                    p,
+                )
                 return True
 
         return False

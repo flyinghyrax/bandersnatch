@@ -19,6 +19,8 @@ class LatestReleaseFilter(FilterReleasePlugin):
     # by default, sort by parsed version string, time (of release) is the other option
     sort_by = "version"
 
+    logger = logging.getLogger(f"bandersnatch.filter.{name}")
+
     def initialize_plugin(self) -> None:
         """
         Initialize the plugin reading patterns from the config.
@@ -33,18 +35,20 @@ class LatestReleaseFilter(FilterReleasePlugin):
         except ValueError:
             return
         if self.keep > 0:
-            logger.info(f"Initialized latest releases plugin with keep={self.keep}")
+            self.logger.info(
+                f"Initialized latest releases plugin with keep={self.keep}"
+            )
         try:
             sort_by = self.configuration["latest_release"]["sort_by"]
             if sort_by in ["time", "version"]:
                 self.sort_by = sort_by
             else:
-                logger.debug(
+                self.logger.warning(
                     "sort_by only allows 'time' and 'version', and not '{}'".format(
                         sort_by
                     )
                 )
-            logger.info(
+            self.logger.info(
                 f"Initialized latest releases plugin with sort_by={self.sort_by}"
             )
         except KeyError:
@@ -85,4 +89,12 @@ class LatestReleaseFilter(FilterReleasePlugin):
         if info.get("version") not in version_names:
             version_names[-1] = info.get("version")
 
-        return version in version_names
+        keep = version in version_names
+        if not keep:
+            self.logger.debug(
+                "rejecting release %s==%s: not in %d latest releases",
+                info["name"],
+                version,
+                self.keep,
+            )
+        return keep

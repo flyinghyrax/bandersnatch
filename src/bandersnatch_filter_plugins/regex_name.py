@@ -5,8 +5,6 @@ from typing import Any
 
 from bandersnatch.filter import FilterProjectPlugin, FilterReleasePlugin
 
-logger = logging.getLogger("bandersnatch")
-
 
 class RegexReleaseFilter(FilterReleasePlugin):
     """
@@ -16,6 +14,8 @@ class RegexReleaseFilter(FilterReleasePlugin):
     name = "regex_release"
     # Has to be iterable to ensure it works with any()
     patterns: list[Pattern] = []
+
+    logger = logging.getLogger(f"bandersnatch.filter.{name}")
 
     def initialize_plugin(self) -> None:
         """
@@ -33,14 +33,25 @@ class RegexReleaseFilter(FilterReleasePlugin):
                     re.compile(pattern_string) for pattern_string in pattern_strings
                 ]
 
-                logger.info(f"Initialized regex release plugin with {self.patterns}")
+                self.logger.info(
+                    f"Initialized regex release plugin with {self.patterns}"
+                )
 
     def filter(self, metadata: dict) -> bool:
         """
         Returns False if version fails the filter, i.e. follows a regex pattern
         """
         version = metadata["version"]
-        return not any(pattern.match(version) for pattern in self.patterns)
+        for pattern in self.patterns:
+            if pattern.match(version):
+                self.logger.debug(
+                    "rejecting release %s==%s: version matches regex pattern %r",
+                    metadata["info"]["name"],
+                    version,
+                    pattern.pattern,
+                )
+                return False
+        return True
 
 
 class RegexProjectFilter(FilterProjectPlugin):
@@ -51,6 +62,8 @@ class RegexProjectFilter(FilterProjectPlugin):
     name = "regex_project"
     # Has to be iterable to ensure it works with any()
     patterns: list[Pattern] = []
+
+    logger = logging.getLogger(f"bandersnatch.filter.{name}")
 
     def initialize_plugin(self) -> None:
         """
@@ -67,7 +80,9 @@ class RegexProjectFilter(FilterProjectPlugin):
                     re.compile(pattern_string) for pattern_string in pattern_strings
                 ]
 
-                logger.info(f"Initialized regex release plugin with {self.patterns}")
+                self.logger.info(
+                    f"Initialized regex release plugin with {self.patterns}"
+                )
 
     def filter(self, metadata: dict) -> bool:
         return not self.check_match(name=metadata["info"]["name"])
@@ -90,4 +105,13 @@ class RegexProjectFilter(FilterProjectPlugin):
             raise ValueError(
                 "No name argument supplied to RegexProjectFilter.check_match"
             )
-        return any(pattern.match(kwargs["name"]) for pattern in self.patterns)
+        name = kwargs["name"]
+        for pattern in self.patterns:
+            if pattern.match(name):
+                self.logger.debug(
+                    "rejecting package %s: name matches regex pattern %r",
+                    name,
+                    pattern.pattern,
+                )
+                return True
+        return False

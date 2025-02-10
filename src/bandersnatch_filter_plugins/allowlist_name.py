@@ -22,6 +22,8 @@ class AllowListProject(FilterProjectPlugin):
     # Requires iterable default
     allowlist_package_names: list[str] = []
 
+    logger = logging.getLogger(f"bandersnatch.filter.{name}")
+
     def initialize_plugin(self) -> None:
         """
         Initialize the plugin
@@ -31,7 +33,7 @@ class AllowListProject(FilterProjectPlugin):
         # operation doesn't end up in the fastpath.
         if not self.allowlist_package_names:
             self.allowlist_package_names = self._determine_unfiltered_package_names()
-            logger.info(
+            self.logger.info(
                 f"Initialized project plugin {self.name}, filtering "
                 + f"{self.allowlist_package_names}"
             )
@@ -87,9 +89,16 @@ class AllowListProject(FilterProjectPlugin):
         if not name:
             return False
 
-        if canonicalize_name(name) in self.allowlist_package_names:
-            logger.info(f"Package {name!r} is allowlisted")
+        canonical_name = canonicalize_name(name)
+        if canonical_name in self.allowlist_package_names:
+            self.logger.info(f"Package {name!r} is allowlisted")
             return False
+
+        self.logger.debug(
+            "rejecting package '%s': canonical name '%s' not allowlisted",
+            name,
+            canonical_name,
+        )
         return True
 
 
@@ -143,6 +152,7 @@ def _parse_package_lines(package_lines: list[str]) -> set[Requirement]:
 
 class AllowListRequirements(AllowListProject):
     name = "project_requirements"
+    logger = logging.getLogger(f"bandersnatch.filter.{name}")
 
     def _determine_unfiltered_package_names(self) -> list[str]:
         """
@@ -167,6 +177,8 @@ class AllowListRelease(FilterReleasePlugin):
     # Requires iterable default
     allowlist_package_names: list[Requirement] = []
 
+    logger = logging.getLogger(f"bandersnatch.filter.{name}")
+
     def initialize_plugin(self) -> None:
         """
         Initialize the plugin
@@ -178,7 +190,7 @@ class AllowListRelease(FilterReleasePlugin):
             self.allowlist_release_requirements = (
                 self._determine_filtered_package_requirements()
             )
-            logger.info(
+            self.logger.info(
                 f"Initialized release plugin {self.name}, filtering "
                 + f"{self.allowlist_release_requirements}"
             )
@@ -243,22 +255,31 @@ class AllowListRelease(FilterReleasePlugin):
         try:
             version = Version(version_string)
         except InvalidVersion:
-            logger.debug(f"Package {name}=={version_string} has an invalid version")
+            self.logger.debug(
+                f"Package {name}=={version_string} has an invalid version"
+            )
             return False
         for requirement in self.allowlist_release_requirements:
             if name != requirement.name:
                 continue
             if version in requirement.specifier:
-                logger.debug(
+                self.logger.debug(
                     f"MATCH: Release {name}=={version} matches specifier "
                     f"{requirement.specifier}"
                 )
                 return True
+
+        self.logger.debug(
+            "rejecting release %s==%s: does not match an allowlisted requirement specifier",
+            name,
+            version_string,
+        )
         return False
 
 
 class AllowListRequirementsPinned(AllowListRelease):
     name = "project_requirements_pinned"
+    logger = logging.getLogger(f"bandersnatch.filter.{name}")
 
     def _determine_filtered_package_requirements(self) -> list[Requirement]:
         """
