@@ -14,7 +14,7 @@ from bandersnatch.filter import FilterProjectPlugin, FilterReleasePlugin
 
 from .encoding import auto_decode
 
-logger = logging.getLogger("bandersnatch")
+app_logger = logging.getLogger("bandersnatch")
 
 
 class AllowListProject(FilterProjectPlugin):
@@ -31,7 +31,7 @@ class AllowListProject(FilterProjectPlugin):
         # operation doesn't end up in the fastpath.
         if not self.allowlist_package_names:
             self.allowlist_package_names = self._determine_unfiltered_package_names()
-            logger.info(
+            app_logger.info(
                 f"Initialized project plugin {self.name}, filtering "
                 + f"{self.allowlist_package_names}"
             )
@@ -62,7 +62,7 @@ class AllowListProject(FilterProjectPlugin):
         return list(unfiltered_packages)
 
     def filter(self, metadata: dict) -> bool:
-        return not self.check_match(name=metadata["info"]["name"])
+        return self.check_match(name=metadata["info"]["name"])
 
     def check_match(self, **kwargs: Any) -> bool:
         """
@@ -81,16 +81,22 @@ class AllowListProject(FilterProjectPlugin):
             True if it matches, False otherwise.
         """
         if not self.allowlist_package_names:
-            return False
+            return True
 
         name = kwargs.get("name", None)
         if not name:
-            return False
+            return True
 
-        if canonicalize_name(name) in self.allowlist_package_names:
-            logger.info(f"Package {name!r} is allowlisted")
-            return False
-        return True
+        canonical_name = canonicalize_name(name)
+        if canonical_name in self.allowlist_package_names:
+            self.filter_logger.info(f"Package {name!r} is allowlisted")
+            return True
+
+        self.filter_logger.debug(
+            "Rejecting: package canonical name '%s' not allowlisted",
+            canonical_name,
+        )
+        return False
 
 
 def get_requirement_files(allowlist: "SectionProxy") -> Iterator[Path]:
@@ -114,11 +120,11 @@ def get_requirement_files(allowlist: "SectionProxy") -> Iterator[Path]:
             files = sorted(requirements_path.glob(requirement_line.strip()))
             for file in files:
                 requirement = file.name
-                logger.info("considering %s", requirements_path / requirement)
+                app_logger.info("considering %s", requirements_path / requirement)
                 yield requirements_path / requirement
         else:
             requirement = requirement_line.strip()
-            logger.info("considering %s", requirements_path / requirement)
+            app_logger.info("considering %s", requirements_path / requirement)
             yield requirements_path / requirement
 
 
@@ -178,7 +184,7 @@ class AllowListRelease(FilterReleasePlugin):
             self.allowlist_release_requirements = (
                 self._determine_filtered_package_requirements()
             )
-            logger.info(
+            app_logger.info(
                 f"Initialized release plugin {self.name}, filtering "
                 + f"{self.allowlist_release_requirements}"
             )
@@ -219,6 +225,9 @@ class AllowListRelease(FilterReleasePlugin):
         version = metadata["version"]
         return self._check_match(canonicalize_name(name), version)
 
+    # FIXME: AllowListProject "fails open" (allows/accepts) if the configured allowlist is empty or the current project is missing a name for some reason.
+    # AllowListRelease fails *closed* (rejects) if the name or version string are missing or invalid. This is also the opposite of BlockListRelease, which
+    # accepts if the name or version are missing or invalid;.
     def _check_match(self, name: str, version_string: str) -> bool:
         """
         Check if the package name and version matches against an allowlisted
@@ -243,17 +252,27 @@ class AllowListRelease(FilterReleasePlugin):
         try:
             version = Version(version_string)
         except InvalidVersion:
-            logger.debug(f"Package {name}=={version_string} has an invalid version")
+            self.filter_logger.info(
+                f"Package {name}=={version_string} has an invalid version"
+            )
             return False
         for requirement in self.allowlist_release_requirements:
             if name != requirement.name:
                 continue
             if version in requirement.specifier:
-                logger.debug(
-                    f"MATCH: Release {name}=={version} matches specifier "
-                    f"{requirement.specifier}"
+                self.filter_logger.info(
+                    "Release %s==%s matches allowlisted specifier %s",
+                    name,
+                    version,
+                    requirement.specifier,
                 )
                 return True
+
+        self.filter_logger.debug(
+            "Rejecting: release %s==%s does not match an allowlisted requirement specifier",
+            name,
+            version_string,
+        )
         return False
 
 

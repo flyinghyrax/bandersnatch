@@ -7,7 +7,7 @@ from packaging.version import InvalidVersion, Version
 
 from bandersnatch.filter import FilterProjectPlugin, FilterReleasePlugin
 
-logger = logging.getLogger("bandersnatch")
+app_logger = logging.getLogger("bandersnatch")
 
 
 class BlockListProject(FilterProjectPlugin):
@@ -24,7 +24,7 @@ class BlockListProject(FilterProjectPlugin):
         # operation doesn't end up in the fastpath.
         if not self.blocklist_package_names:
             self.blocklist_package_names = self._determine_filtered_package_names()
-            logger.info(
+            app_logger.info(
                 f"Initialized project plugin {self.name}, filtering "
                 + f"{self.blocklist_package_names}"
             )
@@ -52,14 +52,14 @@ class BlockListProject(FilterProjectPlugin):
             if package_requirement.specifier:
                 continue
             if package_requirement.name != package_line:
-                logger.debug(
+                app_logger.debug(
                     "Package line %r does not match requirement name %r",
                     package_line,
                     package_requirement.name,
                 )
                 continue
             filtered_packages.add(canonicalize_name(package_requirement.name))
-        logger.debug("Project blocklist is %r", list(filtered_packages))
+        app_logger.debug("Project blocklist is %r", list(filtered_packages))
         return list(filtered_packages)
 
     def filter(self, metadata: dict) -> bool:
@@ -85,8 +85,12 @@ class BlockListProject(FilterProjectPlugin):
         if not name:
             return False
 
-        if canonicalize_name(name) in self.blocklist_package_names:
-            logger.info(f"Package {name!r} is blocklisted")
+        canonical_name = canonicalize_name(name)
+        if canonical_name in self.blocklist_package_names:
+            self.filter_logger.info(
+                "Rejecting: package canonical name '%s' is blocklisted",
+                canonical_name,
+            )
             return True
         return False
 
@@ -107,7 +111,7 @@ class BlockListRelease(FilterReleasePlugin):
             self.blocklist_release_requirements = (
                 self._determine_filtered_package_requirements()
             )
-            logger.info(
+            app_logger.info(
                 f"Initialized release plugin {self.name}, filtering "
                 + f"{self.blocklist_release_requirements}"
             )
@@ -170,15 +174,19 @@ class BlockListRelease(FilterReleasePlugin):
         try:
             version = Version(version_string)
         except InvalidVersion:
-            logger.debug(f"Package {name}=={version_string} has an invalid version")
+            self.filter_logger.info(
+                f"Package {name}=={version_string} has an invalid version"
+            )
             return False
         for requirement in self.blocklist_release_requirements:
             if name != requirement.name:
                 continue
             if version in requirement.specifier:
-                logger.debug(
-                    f"MATCH: Release {name}=={version} matches specifier "
-                    f"{requirement.specifier}"
+                self.filter_logger.info(
+                    "Rejecting: release %s==%s matches blocklisted requirement specifier %s",
+                    name,
+                    version_string,
+                    requirement.specifier,
                 )
                 return True
         return False

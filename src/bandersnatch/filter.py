@@ -2,6 +2,7 @@
 Blocklist management
 """
 
+import logging
 from collections import defaultdict
 from importlib.metadata import entry_points
 from typing import TYPE_CHECKING, Any
@@ -105,6 +106,10 @@ class Filter:
     @property
     def blocklist(self) -> "SectionProxy":
         return self.configuration["blocklist"]
+
+    @property
+    def filter_logger(self) -> logging.Logger:
+        return logging.getLogger(f"bandersnatch.filter.{self.name}")
 
 
 class FilterProjectPlugin(Filter):

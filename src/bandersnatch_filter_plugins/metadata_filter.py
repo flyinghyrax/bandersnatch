@@ -1,3 +1,4 @@
+import dataclasses as dc
 import logging
 import re
 from configparser import SectionProxy
@@ -13,7 +14,13 @@ from bandersnatch.filter import Filter  # isort:skip
 from bandersnatch.filter import FilterMetadataPlugin  # isort:skip
 from bandersnatch.filter import FilterReleaseFilePlugin  # isort:skip
 
-logger = logging.getLogger("bandersnatch")
+app_logger = logging.getLogger("bandersnatch")
+
+
+@dc.dataclass(slots=True)
+class MatchResult:
+    accept: bool
+    reason: str
 
 
 class RegexFilter(Filter):
@@ -26,7 +33,7 @@ class RegexFilter(Filter):
     match_patterns = "any"
     nulls_match = True
     initialized = False
-    patterns: dict = {}
+    patterns: dict[str, list[re.Pattern]] = {}
 
     def initialize_plugin(self) -> None:
         """
@@ -37,7 +44,6 @@ class RegexFilter(Filter):
         except KeyError:
             return
         else:
-            logger.info(f"Initializing {self.name} plugin")
             if not self.initialized:
                 for k in config:
                     pattern_strings = [
@@ -46,7 +52,7 @@ class RegexFilter(Filter):
                     self.patterns[k] = [
                         re.compile(pattern_string) for pattern_string in pattern_strings
                     ]
-                logger.info(f"Initialized {self.name} plugin with {self.patterns}")
+                app_logger.info(f"Initialized {self.name} plugin with {self.patterns}")
                 self.initialized = True
 
     def filter(self, metadata: dict) -> bool:
@@ -58,9 +64,17 @@ class RegexFilter(Filter):
             return True
 
         # Walk through keys of patterns dict and return True iff all match
-        return all(self._match_node_at_path(k, metadata) for k in self.patterns)
+        for key in self.patterns:
+            result = self._match_node_at_path(key, metadata)
+            if not result.accept:
+                self.filter_logger.info(
+                    "Rejecting: metadata key %s: %s", key, result.reason
+                )
+                return False
 
-    def _match_node_at_path(self, key: str, metadata: dict) -> bool:
+        return True
+
+    def _match_node_at_path(self, key: str, metadata: dict) -> MatchResult:
         # Grab any tags prepended to key
         tags = key.split(":")
 
@@ -113,31 +127,40 @@ class RegexFilter(Filter):
 
     def _match_any_patterns(
         self, key: str, values: list[str], nulls_match: bool = True
-    ) -> bool:
-        results = []
+    ) -> MatchResult:
+        if nulls_match and not values:
+            return MatchResult(True, "path had no values and 'nulls_match' is true")
+
         for pattern in self.patterns[key]:
-            if nulls_match and not values:
-                results.append(True)
-                continue
             for value in values:
-                results.append(pattern.match(value))
-        return any(results)
+                if pattern.match(value):
+                    return MatchResult(
+                        True, f"value '{value}' matched pattern {pattern}"
+                    )
+
+        return MatchResult(False, "no value matched a configured pattern")
 
     def _match_all_patterns(
         self, key: str, values: list[str], nulls_match: bool = True
-    ) -> bool:
-        results = []
+    ) -> MatchResult:
+        if nulls_match and not values:
+            return MatchResult(True, "path had no values and 'nulls_match' is true")
+
         for pattern in self.patterns[key]:
-            if nulls_match and not values:
-                results.append(True)
-                continue
-            results.append(any(pattern.match(v) for v in values))
-        return all(results)
+            for value in values:
+                if not pattern.match(value):
+                    return MatchResult(
+                        False, f"value '{value}' did not match pattern {pattern}"
+                    )
+
+        return MatchResult(True, "all values matched all patterns")
 
     def _match_none_patterns(
         self, key: str, values: list[str], nulls_match: bool = True
-    ) -> bool:
-        return not self._match_any_patterns(key, values)
+    ) -> MatchResult:
+        # FIXME: should this pass through `nulls_match`?
+        any_result = self._match_any_patterns(key, values)
+        return dc.replace(any_result, accept=not any_result.accept)
 
 
 class RegexProjectMetadataFilter(FilterMetadataPlugin, RegexFilter):
@@ -199,7 +222,7 @@ class SizeProjectMetadataFilter(FilterMetadataPlugin, AllowListProject):
                     "max_package_size"
                 ]
             except KeyError:
-                logger.warning(
+                app_logger.warning(
                     f"Unable to initialise {self.name} plugin;"
                     "must create max_package_size in configuration."
                 )
@@ -207,7 +230,7 @@ class SizeProjectMetadataFilter(FilterMetadataPlugin, AllowListProject):
             try:
                 self.max_package_size = parse_size(human_package_size, binary=True)
             except InvalidSize:
-                logger.warning(
+                app_logger.warning(
                     f"Unable to initialise {self.name} plugin;"
                     f'max_package_size of "{human_package_size}" is not valid.'
                 )
@@ -227,7 +250,7 @@ class SizeProjectMetadataFilter(FilterMetadataPlugin, AllowListProject):
                         "; except packages in the allowlist: "
                         + f"{self.allowlist_package_names}"
                     )
-                logger.info(log_msg)
+                app_logger.info(log_msg)
 
             self.initialized = True
 
@@ -239,9 +262,9 @@ class SizeProjectMetadataFilter(FilterMetadataPlugin, AllowListProject):
         if self.max_package_size <= 0:
             return True
 
-        if self.allowlist_package_names and not self.check_match(
-            name=metadata["info"]["name"]
-        ):
+        name = metadata["info"]["name"]
+        if self.allowlist_package_names and self.check_match(name=name):
+            # check_match inherited from AllowListProject already emits filtering logs
             return True
 
         total_size = 0
@@ -249,7 +272,17 @@ class SizeProjectMetadataFilter(FilterMetadataPlugin, AllowListProject):
             for file in release:
                 total_size += file["size"]
 
-        return total_size <= self.max_package_size
+        keep = total_size <= self.max_package_size
+
+        if not keep:
+            self.filter_logger.info(
+                "Rejecting: project %s total size of all release files %d > maximum %d",
+                name,
+                total_size,
+                self.max_package_size,
+            )
+
+        return keep
 
 
 class VersionRangeFilter(Filter):
@@ -280,7 +313,7 @@ class VersionRangeFilter(Filter):
                     self.specifiers[k] = [
                         parse(ver) for ver in config[k].split("\n") if ver
                     ]
-                logger.info(
+                app_logger.info(
                     f"Initialized version_range_release_file_metadata plugin with {self.specifiers}"  # noqa: E501
                 )
                 self.initialized = True
@@ -340,9 +373,13 @@ class VersionRangeFilter(Filter):
         ispecs = self.specifiers[key]
         if any(ospecs.contains(ispec, prereleases=True) for ispec in ispecs):
             return True
+
         # Otherwise, fail
-        logger.info(
-            f"Failed check for {key}='{ospecs}' against '{ispecs}'"  # noqa: E501
+        self.filter_logger.info(
+            "Rejecting: specifier set %s='%s' failed check against '%s'",
+            key,
+            ospecs,
+            ispecs,
         )
         return False
 

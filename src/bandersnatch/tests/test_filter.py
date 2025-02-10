@@ -163,8 +163,8 @@ packages =
         self.assertTrue(
             plugins["blocklist_project"].check_match(name="trove-classifiers")
         )
-        self.assertFalse(plugins["allowlist_project"].check_match(name="sampleproject"))
-        self.assertFalse(
+        self.assertTrue(plugins["allowlist_project"].check_match(name="sampleproject"))
+        self.assertTrue(
             plugins["allowlist_project"].check_match(name="trove-classifiers")
         )
 
